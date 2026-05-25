@@ -1,61 +1,70 @@
-from fastapi import FastAPI
+import time
 
-from models import Product
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from fastapi import Request
+from api.product_api import product_router
+from core.database import Base, engine
+from core.limiter import limiter
 
 app = FastAPI()
 
-products = [
-    Product(id=1, name="Phone", description="Phone", price=99, quantity=10 ),
-    Product(id=2, name="laptop", description="laptop", price=999, quantity=6 )
-]
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+app.include_router(product_router)
+
+# "Create all tables registered under this Base metadata"
+# like spring.jpa.hibernate.ddl-auto=update
+# creates ALL tables automatically.
+Base.metadata.create_all(bind=engine)
 
 
 @app.get("/")
-def greeting():
-    print("Welcome to home page")
+async def greeting():
     return {"message": "Welcome to home page"}
 #--------------------------------------------
 
-@app.get("/products")
-def greeting():
-    return products
-#--------------------------------------------------
+#   lifespan events (startup/shutdown) in FastAPI
 
-@app.get("/products/{id}")
-def get_product_by_id(id: int):
-    for product in products:
-        if product.id == id:
-            return product
-        else:
-            return {"message": "Product not found"}
-    return None
-#----------------------------------------------------------
+@app.on_event("startup")
+def startup_event():
+   print("Application started........")
 
-@app.post("/products")
-def add_product(product: Product):
-    products.append(product)
-    return products
-#--------------------------------------------------------------
+@app.on_event("shutdown")
+def shutdown_event():
+   print("Application stopped........")
 
-@app.put("/products/{id}")
-def update_product(id: int, updated_product: Product):
-    for product in products:
-        if product.id == id:
-            product.name = updated_product.name
-            product.description = updated_product.description
-            product.price = updated_product.price
-            product.quantity = updated_product.quantity
-            return product
+# ----------------------------------------
+# Rate limiting with slowapi
+app.state.limiter = limiter
 
+app.add_middleware(SlowAPIMiddleware)
 
-    return {"message": "Product not found"}
-#-------------------------------------------------
+app.add_exception_handler(
+    RateLimitExceeded,
+    _rate_limit_exceeded_handler
+)
 
-@app.delete("/products/{id}")
-def delete_product(id: int):
-    for product in products:
-        if product.id == id:
-            products.remove(product)
-            return products
-
-    return {"message": "Product not found"}
+#---------------
+#    middleware in FastAPI - A middleware is a function that runs before and after each request.
+#    It can be used to perform tasks such as logging, authentication, and rate limiting.
+@app.middleware("http")
+async def log_request_time(request: Request, call_next):
+   start_time = time.time()
+   response = await call_next(request)
+   process_time = time.time() - start_time
+   response.headers["X-Process-Time"] = str(process_time)
+   print("Request processing time: {} seconds".format(process_time))
+   return response
+#-----------------------------
